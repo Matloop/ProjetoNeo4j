@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
-from Main import GerenciadorCarrinhoCompras
+from GerenciadorCarrinhoCompras import GerenciadorCarrinhoCompras
 
 class CarrinhoComprasGUI:
     def __init__(self, root):
