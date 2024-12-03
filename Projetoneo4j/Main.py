@@ -71,6 +71,9 @@ class GerenciadorCarrinhoCompras:
                 session.run(
                     "MERGE (u:Usuario {email: $email}) "
                     "SET u.nome = $nome "
+                    "CREATE (c:Carrinho {usuario_email: $email}) "
+                    "CREATE (u)-[:TEM_CARRINHO]->(c) "
+                    "SET c.total = 0 "
                     "RETURN u.email AS email, u.nome AS nome",
                     nome=nome, email=email
                 )
@@ -107,8 +110,9 @@ class GerenciadorCarrinhoCompras:
         with self._driver.session() as session:
             try:
                 session.run(
-                    "MERGE (u:Usuario {email: $email_usuario}) "
+                    "MATCH (u:Usuario {email: $email_usuario}) "
                     "MERGE (c:Carrinho {usuario_email: $email_usuario}) "
+                    "MERGE (u)-[:TEM_CARRINHO]->(c) "
                     "SET c.total = 0 "
                     "RETURN c.usuario_email AS usuario_email, c.total AS total",
                     email_usuario=email_usuario
@@ -127,7 +131,7 @@ class GerenciadorCarrinhoCompras:
         """
         with self._driver.session() as session:
             try:
-                session.run(
+                result = session.run(
                     "MATCH (u:Usuario {email: $email_usuario}) "
                     "MATCH (p:Produto {nome: $nome_produto}) "
                     "MATCH (c:Carrinho {usuario_email: $email_usuario}) "
@@ -138,8 +142,10 @@ class GerenciadorCarrinhoCompras:
                     email_usuario=email_usuario, nome_produto=nome_produto, quantidade=quantidade
                 )
                 logger.info(f"{quantidade} {nome_produto}(s) adicionados ao carrinho de {email_usuario}.")
+                return result.single()["total"]
             except Neo4jError as e:
                 logger.error(f"Erro ao adicionar produto {nome_produto} ao carrinho de {email_usuario}: {e}")
+                return 0
 
     def obter_conteudo_carrinho(self, email_usuario: str):
         """
@@ -150,7 +156,7 @@ class GerenciadorCarrinhoCompras:
         with self._driver.session() as session:
             try:
                 result = session.run(
-                    "MATCH (u:Usuario {email: $email_usuario})-[:POSUI]->(c:Carrinho) "
+                    "MATCH (u:Usuario {email: $email_usuario})-[:TEM_CARRINHO]->(c:Carrinho) "
                     "MATCH (c)-[r:CONTEM]->(p:Produto) "
                     "RETURN p.nome AS nome_produto, r.quantidade AS quantidade, p.preco AS preco, "
                     "r.quantidade * p.preco AS total_produto",
@@ -172,7 +178,7 @@ class GerenciadorCarrinhoCompras:
         with self._driver.session() as session:
             try:
                 result = session.run(
-                    "MATCH (u:Usuario {email: $email_usuario})-[:POSUI]->(c:Carrinho) "
+                    "MATCH (u:Usuario {email: $email_usuario})-[:TEM_CARRINHO]->(c:Carrinho) "
                     "RETURN c.total AS total",
                     email_usuario=email_usuario
                 )
@@ -181,6 +187,47 @@ class GerenciadorCarrinhoCompras:
                 logger.error(f"Erro ao obter total do carrinho de {email_usuario}: {e}")
                 return 0
 
+    def listar_carrinhos(self):
+        """
+        Lista os carrinhos de todos os usuários com seus respectivos produtos
+        """
+        with self._driver.session() as session:
+            try:
+                result = session.run(
+                    """
+                    MATCH (u:Usuario)
+                    OPTIONAL MATCH (u)-[:TEM_CARRINHO]->(c:Carrinho)
+                    OPTIONAL MATCH (c)-[r:CONTEM]->(p:Produto)
+                    RETURN 
+                        u.email AS email_usuario, 
+                        u.nome AS nome_usuario,
+                        COLLECT(DISTINCT {
+                            nome_produto: p.nome, 
+                            quantidade: r.quantidade, 
+                            preco: p.preco,
+                            total_item: COALESCE(r.quantidade, 0) * COALESCE(p.preco, 0)
+                        }) AS produtos,
+                        COALESCE(c.total, 0) AS total_carrinho
+                    """
+                )
+                
+                carrinhos = []
+                for record in result:
+                    carrinho = {
+                        "email_usuario": record["email_usuario"],
+                        "nome_usuario": record["nome_usuario"],
+                        "produtos": record["produtos"],
+                        "total_carrinho": record["total_carrinho"]
+                    }
+                    carrinhos.append(carrinho)
+                
+                logger.info(f"Listados {len(carrinhos)} carrinhos.")
+                return carrinhos
+            
+            except Neo4jError as e:
+                logger.error(f"Erro ao listar carrinhos: {e}")
+                return []
+
 def main():
     """
     Exemplo de uso e demonstração do GerenciadorCarrinhoCompras
@@ -188,22 +235,20 @@ def main():
     gerenciador_carrinho = None
     try:
         # Inicializa o gerenciador de carrinho com as credenciais definidas
-        
         gerenciador_carrinho = GerenciadorCarrinhoCompras()
 
-        
+        # Criar alguns usuários, produtos e carrinhos de exemplo
+        gerenciador_carrinho.criar_usuario("João Silva", "joao@email.com")
+        gerenciador_carrinho.criar_usuario("Maria Souza", "maria@email.com")
 
-        # Adiciona itens ao carrinho
-        gerenciador_carrinho.adicionar_ao_carrinho("joao@exemplo.com", "Laptop", 1)
-        gerenciador_carrinho.adicionar_ao_carrinho("maria@exemplo.com", "Fone de Ouvido", 65)
+        gerenciador_carrinho.criar_produto("Notebook", 2500.00, 10)
+        gerenciador_carrinho.criar_produto("Mouse", 150.00, 20)
 
-        # Exibe conteúdo do carrinho
-        print("Carrinho João:", gerenciador_carrinho.obter_conteudo_carrinho("joao@exemplo.com"))
-        print("Carrinho Maria:", gerenciador_carrinho.obter_conteudo_carrinho("maria@exemplo.com"))
+        # Adicionar produtos aos carrinhos
+        gerenciador_carrinho.adicionar_ao_carrinho("joao@email.com", "Notebook", 2)
+        gerenciador_carrinho.adicionar_ao_carrinho("joao@email.com", "Mouse", 1)
+        gerenciador_carrinho.adicionar_ao_carrinho("maria@email.com", "Notebook", 1)
 
-        # Exibe total do carrinho
-        print("Total João:", gerenciador_carrinho.obter_total_carrinho("joao@exemplo.com"))
-        print("Total Maria:", gerenciador_carrinho.obter_total_carrinho("maria@exemplo.com"))
 
     finally:
         if gerenciador_carrinho:
